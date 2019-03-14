@@ -62,6 +62,7 @@ public class SegmentIDGenImpl implements IDGen {
         // 确保加载到kv后才初始化成功
         updateCacheFromDb();
         initOK = true;
+        // 设置一个守护进程，每隔一分钟同步一下cache和DB
         updateCacheFromDbAtEveryMinute();
         return initOK;
     }
@@ -84,6 +85,11 @@ public class SegmentIDGenImpl implements IDGen {
         }, 60, 60, TimeUnit.SECONDS);
     }
 
+    /**
+     * 1. 从DB中load所有biz_tag
+     * 2. 跟cache中缓存的key做比较，不在其中的重新加入到cache中
+     * 3. 判断cache中的key在DB中是否还存在，不存在的从cache中删除
+     */
     private void updateCacheFromDb() {
         logger.info("update cache from db");
         StopWatch sw = new Slf4JStopWatch();
@@ -145,6 +151,18 @@ public class SegmentIDGenImpl implements IDGen {
         return new Result(EXCEPTION_ID_KEY_NOT_EXISTS, Status.EXCEPTION);
     }
 
+    /**
+     *
+     * 根据key同步dbleaf-alloc记录到segment
+     * SegmentBuffer第一次初始化时，将db中的step，max_id同步到segment，Segment中id的计算公式： max_id - step
+     * 因为segmentBuffer采用两段式缓存，当segment.idle<0.9且nextReady=false时,进行备用segment的赋值
+     *
+     *
+     *
+     *
+     * @param key  leaf-alloc.biz_tag
+     * @param segment 缓存的segment
+     */
     public void updateSegmentFromDb(String key, Segment segment) {
         StopWatch sw = new Slf4JStopWatch();
         SegmentBuffer buffer = segment.getBuffer();
@@ -181,6 +199,7 @@ public class SegmentIDGenImpl implements IDGen {
             buffer.setMinStep(leafAlloc.getStep());//leafAlloc的step为DB中的step
         }
         // must set value before set max
+        // 并发情况下如果先set max可能会导致getIdFromSegmentBuffer()中value < segment.getMax()条件判断异常
         long value = leafAlloc.getMaxId() - buffer.getStep();
         segment.getValue().set(value);
         segment.setMax(leafAlloc.getMaxId());
@@ -209,11 +228,9 @@ public class SegmentIDGenImpl implements IDGen {
                                 if (updateOk) {
                                     buffer.wLock().lock();
                                     buffer.setNextReady(true);
-                                    buffer.getThreadRunning().set(false);
                                     buffer.wLock().unlock();
-                                } else {
-                                    buffer.getThreadRunning().set(false);
                                 }
+                                buffer.getThreadRunning().set(false);
                             }
                         }
                     });

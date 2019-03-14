@@ -7,7 +7,15 @@ import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * 双buffer
+ * 双buffer且支持step的动态调整
+ * 备用segment在currentSegment的idle小于0.9之后，启动一个线程对备用segment进行设置
+ * step动态调整策略：
+ *  1. 两次获取ID时间如果小于15min，将step扩大为当前两倍（需保证扩大后的ID不超过MAX阀值）
+ *  2. 两次获取ID的时间如果大于30min，将当前step/2与buffer.minStep进行比较，大于minStep，则设置为step/2；否则保持不变
+ *
+ *      SegmentBuffer.minStep为DB中的step
+ *      SegmentBuffer.step初始值为DB中的step，后期根据运行情况会进行修改
+ *
  */
 public class SegmentBuffer {
     private String key;
@@ -19,7 +27,7 @@ public class SegmentBuffer {
     private final ReadWriteLock lock;
 
     private volatile int step;
-    private volatile int minStep;
+    private volatile int minStep; // 保证segment中最小部长始终为DB中设置的step
     private volatile long updateTimestamp;
 
     public SegmentBuffer() {
